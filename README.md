@@ -19,3 +19,7 @@ import multitherm
 multitherm.main()
 ```
 
+The `multitherm` code communicates over the USB port as a serial
+device. Details of the commands and their responses can be found in
+the [Commands.md] file.
+
