@@ -21,8 +21,9 @@ import time
 import sys
 import json
 import gc
+import os
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 zeroCK = 273.15
 
@@ -32,9 +33,14 @@ DEFAULT_DEAD_ZONE = 1.0
 DEFAULT_MONITOR = 0
 
 # Default values for the thermistors and reference resistors
-DEFAULT_R_REF = 10000
+#  The nominal resistance of the thermistor
+DEFAULT_R_NOMINAL = 10000
+#  The temperatue (in C) for the nominal resistance
+DEFAULT_NOMINAL_TEMP = 25
+#  The 'beta' value of the resistor
 DEFAULT_BETA = 3844.0507496971973
-DEFAULT_R_INF = 0.02525047617366118
+#  The value of the fixed resistor in the voltage divider
+DEFAULT_R_REF = 10000
 
 def debug(s):
     # pyb.USB_VCP().write("DEBUG {}\r\n".format(s))
@@ -48,6 +54,15 @@ def calibrate_termistor(t0, r0, t1, r1):
     beta = math.log(r1/r0) / (1/t1 - 1/t0)
     r_inf = r0 * math.exp(-beta/t0)
     return beta, r_inf
+
+# The dip switched connect the inputs to groud, so we need to set
+# pull-ups on the inputs and we need to invert the value when we read
+# them back.
+
+dip_pins = [pyb.Pin("X{}".format(12-i), pyb.Pin.IN, pull=pyb.Pin.PULL_UP) for i in range(4)]
+
+def read_ID():
+    return sum((1-dip_pins[i].value()) << i for i in range(4))
 
 class Thermistor:
     def __init__(self, adc, ref_R, beta, r_inf):
@@ -246,6 +261,7 @@ class CommandLine:
 
                 # Process the command
                 if not l:
+                    # Respond to empty lines, so that the user knows we're alive
                     serial_port.write("OK\r\n")
                 else:
                     try:
@@ -258,18 +274,19 @@ class CommandLine:
     # Each command is represented by a dictionary entry:
     #   <command name> : ( <needs thermostat index>, <min arg count>, <max arg count>)
     _command_table = {
-        "VERSION": (False, 0, 0, "Print the current firmware version"),
-        "TEMP": (True, 0, 0, "Print the current channel temperature"),
-        "SET": (True, 1, 1, "Set the channel set-point"),
-        "OVERRIDE": (True, 1, 1, "Override channel output"),
-        "STATE": (True, 0, 0, "Print channel state information"),
-        "MONITOR": (False, 0, 1, "Set period for automatic channel state monitoring"),
+        "VERSION":    (False, 0, 0, "Print the current firmware version"),
+        "TEMP":       (True,  0, 0, "Print the current channel temperature"),
+        "SET":        (True,  1, 1, "Set the channel set-point"),
+        "OVERRIDE":   (True,  1, 1, "Override channel output"),
+        "STATE":      (True,  0, 0, "Print channel state information"),
+        "MONITOR":    (False, 0, 1, "Set period for automatic channel state monitoring"),
         "SAVECONFIG": (False, 0, 0, "Write current settings to config storage"),
         "LOADCONFIG": (False, 0, 0, "Load stored configuration"),
-        "EXIT": (False, 0, 0, "Exit command loop"),
-        "RESET": (False, 0, 0, "Reboot thermostate software"),
-        "HELP": (False, 0, 1, "Print help messages"),
-        "ADJUST": (True, 1, 1, "Set offset to be added to thermistor reading"),
+        "EXIT":       (False, 0, 0, "Exit command loop"),
+        "RESET":      (False, 0, 1, "Reboot thermostat software"),
+        "HELP":       (False, 0, 1, "Print help messages"),
+        "ADJUST":     (True,  1, 1, "Set offset to be added to thermistor reading"),
+        "ID":         (False, 0, 0, "Print the board ID"),
     }
 
     def _process_command(self, l):
@@ -297,10 +314,10 @@ class CommandLine:
                     except ValueError:
                         self.port.write("ERR can not parse channel number {}\r\n".format(therm_no))
                         return
-                    if i < 0 or i >= len(self.t_list):
-                        self.port.write("ERR channel number must be in range 0 to {}\r\n".format(len(self.t_list)))
+                    if i < 1 or i > len(self.t_list):
+                        self.port.write("ERR channel number must be in range 1 to {}\r\n".format(len(self.t_list)))
                         return
-                    tl = [i]
+                    tl = [i-1]
 
         if n_args < c_min:
             self.port.write("ERR command {} requires at least {} arguments\r\n".format(verb, c_min))
@@ -394,9 +411,13 @@ class CommandLine:
         else:
             self.port.write("ERR EXIT disallowed\r\n")
             
-    def _do_reset(self):
+    def _do_reset(self, *arg):
+        hard = (arg and arg[0].upper() == "HARD")
         self.port.write("RESET OK\r\n")
-        machine.reset()
+        if hard:
+            machine.reset()
+        else:
+            machine.soft_reset()
 
     def _do_help(self, cmd=None):
         if cmd:
@@ -414,7 +435,7 @@ class CommandLine:
             c_therm, c_min, c_max, c_help = self._command_table[c_name]
             l = "HELP " + c_name
             if c_therm:
-                l += " <therm number>"
+                l += " <channel>"
             for i in range(c_min):
                 l += " <arg>"
             for i in range(c_min, c_max):
@@ -422,6 +443,10 @@ class CommandLine:
             l += "\r\n"
             self.port.write(l)
             self.port.write("HELP     {}\r\n".format(c_help))
+
+    def _do_id(self):
+        self.port.write("ID {}\r\n".format(read_ID()))
+        
 
 def load_config(n):
     t_defs = {"set_point":DEFAULT_SET_POINT, "dead_zone":DEFAULT_DEAD_ZONE}
@@ -449,20 +474,30 @@ def run(n=8, exit_allowed=True, wdt_timeout=None):
 
     beta = DEFAULT_BETA
     ref_r = DEFAULT_R_REF
-    r_inf = DEFAULT_R_INF
+    r_inf = DEFAULT_R_NOMINAL * math.exp(-beta/(DEFAULT_NOMINAL_TEMP + zeroCK))
 
+    # The thermistors are on pins X1 through X8, ascending
     adc_pin_names = ["X{}".format(i+1) for i in range(n)]
-    relay_pin_names = ["Y{}".format(i+1) for i in range(n)]
+    # The relays are on pins Y8 to Y1, descending
+    relay_pin_names = ["Y{}".format(8-i) for i in range(n)]
     
     config = load_config(n)
     
     adc_list = [pyb.ADC(pyb.Pin(p)) for p in adc_pin_names]
     relay_list = [pyb.Pin(p, pyb.Pin.OUT_PP) for p in relay_pin_names]
     tr_list = [Thermistor(adc, ref_r, beta, r_inf) for adc in adc_list]
-    t_list = [Thermostat(tr, relay, i, **config["therms"][i]) for i,(tr, relay) in enumerate(zip(tr_list, relay_list))]
+    t_list = [Thermostat(tr, relay, i+1, **config["therms"][i]) for i,(tr, relay) in enumerate(zip(tr_list, relay_list))]
 
     serial_port.write("STARTING pyboard multi-thermostat version {}\r\n".format(__version__))
     
     cmd_proc = CommandLine(serial_port, t_list, exit_allowed=exit_allowed, monitor_period=config["monitor"], wdt_timeout=wdt_timeout)
     cmd_proc.command_loop()
 
+def main():
+    try:
+        os.stat("DEBUG")
+        debug = True
+    except OSError:
+        debug = False
+    
+    run(exit_allowed = debug, wdt_timeout = None if debug else 10)
