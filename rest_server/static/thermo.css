@@ -1,0 +1,83 @@
+span.thermostat {
+    font-family: Arial, sans-serif;
+    display: inline-block;
+    width: 112px;
+    height: 135px;
+    margin: 2px;
+    text-align: center;
+    padding: 4px;
+    border-radius: 4px;
+    border: 2px solid black;
+}
+
+.heating {
+    background-color: OrangeRed;
+    border: unset;
+}
+
+span.roomname {
+    display: inline-block;
+    margin-top: 4px;
+}
+
+span.currenttemp {
+    display: inline-block;
+    margin: 2px;
+    margin-bottom: 0px;
+    font-size: 2.5em;
+}
+
+span.setpoint {
+    display: inline-block;
+    margin: 2px;
+}
+
+.controlbutton {
+    display: inline-block;
+    width: 1.4em;
+    height: 1.4em;
+    border-radius: 0.7em;
+    background-color: lightgrey;
+    margin: 2pt;
+    align: center;
+    vertical-align: middle;
+}
+
+span.setpoint img {
+    width: 1.2em;
+    height: 1.2em;
+    padding: 0.2em;
+    vertical-align: -0.4em;
+}
+
+div.override-buttons {
+    margin: 4px;
+    padding: 2px;
+    margin-top: 6px;
+}
+
+span.or-button {
+    min-width: 5em;
+    font-size: 0.8em;
+    margin: 0;
+    padding: 3px;
+    border-style: solid;
+    border-color: black;
+    border-width: 2px 2px 2px 0px;
+    background: #707070;
+}
+
+span.or-button:first-child {
+    border-top-left-radius: 0.5em;
+    border-bottom-left-radius: 0.5em;
+    border-width: 2px 2px 2px 2px;
+}
+
+span.or-button:last-child {
+    border-top-right-radius: 0.5em;
+    border-bottom-right-radius: 0.5em;
+}
+
+span.or-button.or-selected {
+    background: lightgrey;
+}

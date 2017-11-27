@@ -1,0 +1,23 @@
+<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">
+<html> <head>
+<link rel="stylesheet" href="/static/thermo.css">
+<link rel="apple-touch-icon" href="/static/T.png">
+<script src="https://unpkg.com/vue"></script>
+<script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+
+<title>Thermostat Controller</title>
+</head>
+
+<body>
+<div id="thermostats">
+    <thermostat
+       v-for="item in display_info"
+       v-bind:display="item"
+       v-bind:class="{heating: item.out}"
+       v-bind:key="item.ID">      
+    </thermostat>
+</div>
+
+<script src="static/stats.js"></script>
+
+</body> </html>
