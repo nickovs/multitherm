@@ -23,7 +23,7 @@ import json
 import gc
 import os
 
-__version__ = "0.4.0"
+__version__ = "0.5.2"
 
 zeroCK = 273.15
 
@@ -70,7 +70,9 @@ class Thermistor:
         self._ref_R = ref_R
         self._beta = beta
         self._r_inf = r_inf
-
+        self._filter = self._read_R()
+        self._filter_time = time.ticks_ms()
+        
     def _RtoT(self, r):
         # Convert resistance into temperature in Kelvin
         return self._beta/math.log(r/self._r_inf)
@@ -80,9 +82,19 @@ class Thermistor:
         v = self._adc.read() / 4096.0
         return v*self._ref_R/(1-v) if v else (self._ref_R/10000.0)
 
+    def _filtered_R(self):
+        # Read the resistance low-pass filtered with a time constant of 2000 milisecond
+        tc = 2000
+        r = self._read_R()
+        t = time.ticks_ms()
+        e = math.exp(time.ticks_diff(self._filter_time, t)/tc)
+        self._filter = (e * self._filter) + ((1-e) * r)
+        self._filter_time = t
+        return self._filter
+    
     def read_T(self):
         """Read temperature and return it in Celsius"""
-        r = self._read_R()
+        r = self._filtered_R()
         return self._RtoT(r) - zeroCK
 
 class Thermostat:
@@ -100,18 +112,21 @@ class Thermostat:
         
     @property
     def temp(self):
+        # Always return temperature rounded to one decimal place in Celsius
         return self._t.read_T() + self.adjust
 
     def check(self):
+        t = self.temp
         if self._override != None:
             self._r.value(self._override)
         else:
             if self._r.value():
-                if self.temp > self._set + self._dead:
+                if t > self._set + self._dead:
                     self._r.value(0)
             else:
-                if self.temp < self._set - self._dead:
+                if t < self._set - self._dead:
                     self._r.value(1)
+        return (t, self._r.value())
 
     @property
     def set_point(self):
@@ -138,9 +153,8 @@ class Thermostat:
         self.check()
         return self._r.value()
 
-    def write_state(self, serial_port):
-        x = "STATE CHAN={} T={:.1f} SET={:.1f} OUT={} ADJ={:.1f} OVERRIDE={}\r\n".format(self.index, self.temp, self.set_point, self.state, self.adjust, self.override)
-        serial_port.write(x)
+    def state_string(self):
+        return "CHAN={} T={:.1f} SET={:.1f} OUT={} ADJ={:.1f} OVERRIDE={}\r\n".format(self.index, self.temp, self.set_point, self.state, self.adjust, self.override)
 
     @property
     def config(self):
@@ -194,6 +208,7 @@ class CommandLine:
 
         self.mon_timer.init(freq=1)
         self.mon_timer.callback(self._mon_callback)
+        self.async_state = False
 
         self.EXIT_flag = False
 
@@ -213,7 +228,9 @@ class CommandLine:
     
         serial_port = self.port
         cmd_line = ""
-
+        previous_state = [(0,0)] * len(self.t_list)
+        last_async = time.time()
+        
         while True:
             # Clean up memory
             gc.collect()
@@ -228,10 +245,23 @@ class CommandLine:
             # Blink the green light at 1Hz
             self.pulse_LED.on() if (time.time() & 1) else self.pulse_LED.off()
 
+            changes = set()
             # Check all the thermostats
-            for t in self.t_list:
-                t.check()
-        
+            for i, t in enumerate(self.t_list):
+                s = t.check()
+                p = previous_state[i]
+                if s[1] != p[1] or abs(s[0]-p[0]) > 0.1:
+                    changes.add(i)
+                    previous_state[i] = s
+                    
+            # If ASYNC is enabled print out what changed
+            if self.async_state and changes and time.time() != last_async:
+                last_async = time.time()
+                while changes:
+                    i = changes.pop()
+                    self.activity.activity(0.05)
+                    serial_port.write("*ASYNC ")
+                    serial_port.write(self.t_list[i].state_string())
             # debug("Monitor: countdown={}, report={}, period={}".format(mon_countdown, mon_report, monitor_period))
             if self.mon_report:
                 # Clear the report flag
@@ -240,7 +270,8 @@ class CommandLine:
                 if self.monitor_period:
                     self.mon_countdown = (self.mon_countdown % self.monitor_period) if self.mon_countdown else self.monitor_period
                 for tt in self.t_list:
-                    tt.write_state(serial_port)
+                    serial_port.write("*MONITOR ")
+                    serial_port.write(tt.state_string())
 
             # Process input
             while True:
@@ -270,6 +301,19 @@ class CommandLine:
                         self.port.write("ERR EXCEPTION trying to process command line {}: {}\r\n".format(e.__class__.__name__, e))
                         # sys.print_exception(e)                        
 
+    @staticmethod
+    def _parse_tristate_arg(arg):
+        opts = {"NONE": None,
+                "NO": None,
+                "-1": None,
+                "ON": 1,
+                "1": 1,
+                "OFF": 0,
+                "0": 0 }
+        arg = arg.upper()
+        if arg not in opts:
+            self.port.write("ERR invalid argument {}\r\n".format(arg))
+        return opts[arg]
 
     # Each command is represented by a dictionary entry:
     #   <command name> : ( <needs thermostat index>, <min arg count>, <max arg count>)
@@ -287,6 +331,7 @@ class CommandLine:
         "HELP":       (False, 0, 1, "Print help messages"),
         "ADJUST":     (True,  1, 1, "Set offset to be added to thermistor reading"),
         "ID":         (False, 0, 0, "Print the board ID"),
+        "ASYNC":      (False, 1, 1, "Enable or disable asynchronous state change messages"),
     }
 
     def _process_command(self, l):
@@ -336,7 +381,7 @@ class CommandLine:
                 c_fn(*args)
         except Exception as e:
             self.port.write("ERR EXCEPTION while executing command {}: {}: {}\r\n".format(verb, e.__class__.__name__, e))
-            # sys.print_exception(e)
+            sys.print_exception(e)
 
     def _do_version(self):
         self.port.write("VERSION {}\r\n".format(__version__))
@@ -352,20 +397,8 @@ class CommandLine:
         self.port.write("SET {} {} OK\r\n".format(therm.index, t))
 
     def _do_override(self, therm, state):
-        opts = {"NONE": None,
-                "NO": None,
-                "-1": None,
-                "ON": 1,
-                "1": 1,
-                "OFF": 0,
-                "0": 0 }
-        state = state.upper()
-        if state not in opts:
-            self.port.write("ERR OVERRIDE invalid setting {} for thermostat {}\r\n".format(state, therm.index))
-        else:
-            therm.override = opts[state]
-            self.port.write("OVERRIDE {} {} OK\r\n".format(therm.index, state))
-
+        therm.override = self._parse_tristate_arg(state)
+        self.port.write("OVERRIDE {} {} OK\r\n".format(therm.index, state.upper()))
 
     def _do_adjust(self, therm, offset):
         offset = float(offset)
@@ -376,7 +409,8 @@ class CommandLine:
             self.port.write("ADJUST {} {:.1f} OK\r\n".format(therm.index, offset))
         
     def _do_state(self, therm):
-        therm.write_state(self.port)
+        self.port.write("STATE ")
+        self.port.write(therm.state_string())
 
     def _do_monitor(self, *value):
         if len(value):
@@ -446,7 +480,10 @@ class CommandLine:
 
     def _do_id(self):
         self.port.write("ID {}\r\n".format(read_ID()))
-        
+
+    def _do_async(self, arg):
+        self.async_state = bool(self._parse_tristate_arg(arg))
+        self.port.write("ASYNC {} OK\r\n".format(arg.upper()))
 
 def load_config(n):
     t_defs = {"set_point":DEFAULT_SET_POINT, "dead_zone":DEFAULT_DEAD_ZONE}

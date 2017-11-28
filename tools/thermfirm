@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+import os
+import re
+from os.path import join
+
+import serial
+import subprocess
+
+# Linux-specific code to locate pyboards on the USB bus
+
+usb_device_re = re.compile(r"^\d+-\d(\.\d)*$")
+usb_subdevice_re = re.compile(r"^\d+-\d(\.\d)*:\d+\.\d+$")
+scsi_host_re = re.compile(r"^host\d+$")
+scsi_target_re = re.compile(r"^target\d+:\d:\d$")
+scsi_endpoint_re = re.compile(r"^\d:\d:\d:\d$")
+
+devices_path = "/sys/bus/usb/devices"
+
+micropython_vid = 'f055'
+
+def vid_for_device(d):
+    return open(join(devices_path, d, "idVendor")).read().strip()
+
+def tty_for_device(d):
+    l = os.listdir(join(devices_path, d, d+":1.1", "tty"))
+    return join("/dev", l[0])
+
+def disk_for_device(d):
+    p = join(devices_path, d, d+":1.0")
+    hosts = [join(p,i) for i in os.listdir(p) if scsi_host_re.match(i)]
+    targets = [join(h,i) for h in hosts for i in os.listdir(h) if scsi_target_re.match(i)]
+    endpoints = [join(t, i) for t in targets for i in os.listdir(t) if scsi_endpoint_re.match(i)]
+    blocks = [join(e, "block") for e in endpoints if "block" in os.listdir(e)]
+    devs = [i for b in blocks for i in os.listdir(b)]
+    return devs[0]
+    
+def find_pyboards():
+    l = [i for i in os.listdir(devices_path) if usb_device_re.match(i)]
+    l = [i for i in l if vid_for_device(i) == micropython_vid]
+    return [(tty_for_device(i), disk_for_device(i)) for i in l]
+
+
+    

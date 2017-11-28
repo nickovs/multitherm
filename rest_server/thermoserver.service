@@ -1,0 +1,14 @@
+# Systemd configuration for the thermostat REST and web server
+[Unit]
+Description=Thermostat server
+
+[Service]
+ExecStart=/home/nicko/multitherm/rest_server/ThermoServer.py
+StandardOutput=inherit
+StandardError=inherit
+WorkingDirectory=/home/nicko/multitherm/rest_server
+User=nicko
+
+[Install]
+WantedBy=multi-user.target
+Alias=thermoserver.service
