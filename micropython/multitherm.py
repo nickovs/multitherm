@@ -70,7 +70,7 @@ class Thermistor:
         self._ref_R = ref_R
         self._beta = beta
         self._r_inf = r_inf
-        self._filter = self._read_R()
+        self._filter = self._raw_T()
         self._filter_time = time.ticks_ms()
         
     def _RtoT(self, r):
@@ -82,20 +82,22 @@ class Thermistor:
         v = self._adc.read() / 4096.0
         return v*self._ref_R/(1-v) if v else (self._ref_R/10000.0)
 
-    def _filtered_R(self):
-        # Read the resistance low-pass filtered with a time constant of 2000 milisecond
-        tc = 2000
+    def _raw_T(self): 
+        # Return unfiltered temperature in Celsius
         r = self._read_R()
+        return self._RtoT(r) - zeroCK
+
+    def read_T(self):
+        """Read filtered temperature in Celsius"""
+        # Read the temerature low-pass filtered with a time constant of 1000 milisecond
+        tc = 1000
+        raw_t = self._raw_T()
         t = time.ticks_ms()
         e = math.exp(time.ticks_diff(self._filter_time, t)/tc)
-        self._filter = (e * self._filter) + ((1-e) * r)
+        self._filter = (e * self._filter) + ((1-e) * raw_t)
         self._filter_time = t
         return self._filter
     
-    def read_T(self):
-        """Read temperature and return it in Celsius"""
-        r = self._filtered_R()
-        return self._RtoT(r) - zeroCK
 
 class Thermostat:
     def __init__(self, t, r, index, set_point=20.0, dead_zone=1.0, override=None, adjust=0.0, **extra_args):
