@@ -23,7 +23,7 @@ import json
 import gc
 import os
 
-__version__ = "0.5.2"
+__version__ = "0.6.0"
 
 zeroCK = 273.15
 
@@ -31,6 +31,8 @@ zeroCK = 273.15
 DEFAULT_SET_POINT=20.0
 DEFAULT_DEAD_ZONE = 1.0
 DEFAULT_MONITOR = 0
+
+HARDWARE_CHANNELS = 8
 
 # Default values for the thermistors and reference resistors
 #  The nominal resistance of the thermistor
@@ -70,7 +72,7 @@ class Thermistor:
         self._ref_R = ref_R
         self._beta = beta
         self._r_inf = r_inf
-        self._filter = self._read_R()
+        self._filter = self._raw_T()
         self._filter_time = time.ticks_ms()
         
     def _RtoT(self, r):
@@ -82,20 +84,22 @@ class Thermistor:
         v = self._adc.read() / 4096.0
         return v*self._ref_R/(1-v) if v else (self._ref_R/10000.0)
 
-    def _filtered_R(self):
-        # Read the resistance low-pass filtered with a time constant of 2000 milisecond
-        tc = 2000
+    def _raw_T(self): 
+        # Return unfiltered temperature in Celsius
         r = self._read_R()
+        return self._RtoT(r) - zeroCK
+
+    def read_T(self):
+        """Read filtered temperature in Celsius"""
+        # Read the temerature low-pass filtered with a time constant of 1000 milisecond
+        tc = 1000
+        raw_t = self._raw_T()
         t = time.ticks_ms()
         e = math.exp(time.ticks_diff(self._filter_time, t)/tc)
-        self._filter = (e * self._filter) + ((1-e) * r)
+        self._filter = (e * self._filter) + ((1-e) * raw_t)
         self._filter_time = t
         return self._filter
     
-    def read_T(self):
-        """Read temperature and return it in Celsius"""
-        r = self._filtered_R()
-        return self._RtoT(r) - zeroCK
 
 class Thermostat:
     def __init__(self, t, r, index, set_point=20.0, dead_zone=1.0, override=None, adjust=0.0, **extra_args):
@@ -195,9 +199,10 @@ class ActivityLED:
         self._timer.deinit()
 
 class CommandLine:       
-    def __init__(self, serial_port, t_list, monitor_period=30, exit_allowed=False, wdt_timeout=None):
+    def __init__(self, serial_port, n_chan, t_list, monitor_period=30, exit_allowed=False, wdt_timeout=None):
         debug("Constructing command line object")
         self.port = serial_port
+        self.n_chan = n_chan
         self.t_list = t_list
         self.monitor_period = monitor_period
         self.exit_allowed = exit_allowed
@@ -228,7 +233,7 @@ class CommandLine:
     
         serial_port = self.port
         cmd_line = ""
-        previous_state = [(0,0)] * len(self.t_list)
+        previous_state = [(0,0)] * HARDWARE_CHANNELS
         last_async = time.time()
         
         while True:
@@ -245,14 +250,18 @@ class CommandLine:
             # Blink the green light at 1Hz
             self.pulse_LED.on() if (time.time() & 1) else self.pulse_LED.off()
 
+            # Check all the thermostats and see what has changed
             changes = set()
-            # Check all the thermostats
             for i, t in enumerate(self.t_list):
-                s = t.check()
-                p = previous_state[i]
-                if s[1] != p[1] or abs(s[0]-p[0]) > 0.1:
-                    changes.add(i)
-                    previous_state[i] = s
+                if i < self.n_chan:
+                    s = t.check()
+                    p = previous_state[i]
+                    if s[1] != p[1] or abs(s[0]-p[0]) > 0.1:
+                        changes.add(i)
+                        previous_state[i] = s
+                else:
+                    # Keep reading the temperature on unused channels, to keep the filter going 
+                    _ = t.temp
                     
             # If ASYNC is enabled print out what changed
             if self.async_state and changes and time.time() != last_async:
@@ -262,6 +271,7 @@ class CommandLine:
                     self.activity.activity(0.05)
                     serial_port.write("*ASYNC ")
                     serial_port.write(self.t_list[i].state_string())
+
             # debug("Monitor: countdown={}, report={}, period={}".format(mon_countdown, mon_report, monitor_period))
             if self.mon_report:
                 # Clear the report flag
@@ -269,9 +279,9 @@ class CommandLine:
                 # If monitoring is on then reset the countdown
                 if self.monitor_period:
                     self.mon_countdown = (self.mon_countdown % self.monitor_period) if self.mon_countdown else self.monitor_period
-                for tt in self.t_list:
+                for i in range(self.n_chan):
                     serial_port.write("*MONITOR ")
-                    serial_port.write(tt.state_string())
+                    serial_port.write(self.t_list[i].state_string())
 
             # Process input
             while True:
@@ -332,6 +342,7 @@ class CommandLine:
         "ADJUST":     (True,  1, 1, "Set offset to be added to thermistor reading"),
         "ID":         (False, 0, 0, "Print the board ID"),
         "ASYNC":      (False, 1, 1, "Enable or disable asynchronous state change messages"),
+        "NCHAN":      (False, 0, 1, "Set the number of channels in operation"),
     }
 
     def _process_command(self, l):
@@ -352,15 +363,15 @@ class CommandLine:
                 therm_no = args.pop(0)
                 n_args -= 1
                 if therm_no == "*":
-                    tl = range(len(self.t_list))
+                    tl = range(self.n_chan)
                 else:
                     try:
                         i = int(therm_no)
                     except ValueError:
                         self.port.write("ERR can not parse channel number {}\r\n".format(therm_no))
                         return
-                    if i < 1 or i > len(self.t_list):
-                        self.port.write("ERR channel number must be in range 1 to {}\r\n".format(len(self.t_list)))
+                    if i < 1 or i > self.n_chan:
+                        self.port.write("ERR channel number must be in range 1 to {}\r\n".format(self.n_chan))
                         return
                     tl = [i-1]
 
@@ -385,6 +396,14 @@ class CommandLine:
 
     def _do_version(self):
         self.port.write("VERSION {}\r\n".format(__version__))
+
+    def _do_nchan(self, *count):
+        if len(count) != 0:
+            count = int(count[0])
+            if count < 1 or count > HARDWARE_CHANNELS:
+                raise ValueError("Channel count must be between 1 and {}".format(HARDWARE_CHANNELS))
+            self.n_chan = count
+        self.port.write("NCHAN {} OK\r\n".format(self.n_chan))
 
     def _do_temp(self, therm):
         self.port.write("TEMP {} {}\r\n".format(therm.index, therm.temp))
@@ -426,14 +445,16 @@ class CommandLine:
 
     def _do_saveconfig(self):
         conf = {"monitor": self.monitor_period,
+                "n_chan": self.n_chan,
                 "therms": [t.config for t in self.t_list] }
         with open("/flash/config.json", "w") as fh:
             fh.write(json.dumps(conf))
         self.port.write("SAVECONFIG OK\r\n")
 
     def _do_loadconfig(self):
-        conf = load_config(len(self.t_list))
+        conf = load_config()
         self.monitor_period = conf["monitor"]
+        self.n_chan = conf["n_chan"]
         for c, t in zip(conf["therms"], self.t_list):
             t.config = c
         self.port.write("LOADCONFIG OK\r\n")
@@ -485,8 +506,12 @@ class CommandLine:
         self.async_state = bool(self._parse_tristate_arg(arg))
         self.port.write("ASYNC {} OK\r\n".format(arg.upper()))
 
-def load_config(n):
-    t_defs = {"set_point":DEFAULT_SET_POINT, "dead_zone":DEFAULT_DEAD_ZONE}
+def load_config():
+    t_defs = {"set_point":DEFAULT_SET_POINT,
+              "dead_zone":DEFAULT_DEAD_ZONE,
+              "override": None,
+              "adjust": 0.0,
+              }
     config = {}
     try:
         config = json.load(open("/flash/config.json"))
@@ -495,17 +520,21 @@ def load_config(n):
 
     if "monitor" not in config:
         config["monitor"] = DEFAULT_MONITOR
+
+    if "n_chan" not in config:
+        config["n_chan"] = HARDWARE_CHANNELS
+
     if "therms" not in config:
-        config["therms"] = [t_defs] * n
+        config["therms"] = [t_defs] * HARDWARE_CHANNELS
     else:
         tt = config["therms"]
-        if len(tt) > n:
-            del tt[n:]
-        elif len(tt) < n:
-            tt.extend([t_defs] * (n - len(tt)))
+        if len(tt) > HARDWARE_CHANNELS:
+            del tt[HARDWARE_CHANNELS:]
+        elif len(tt) < HARDWARE_CHANNELS:
+            tt.extend([t_defs] * (HARDWARE_CHANNELS - len(tt)))
     return config
 
-def run(n=8, exit_allowed=True, wdt_timeout=None):
+def run(exit_allowed=True, wdt_timeout=None):
     # Use the USB port
     serial_port = pyb.USB_VCP()
 
@@ -513,12 +542,14 @@ def run(n=8, exit_allowed=True, wdt_timeout=None):
     ref_r = DEFAULT_R_REF
     r_inf = DEFAULT_R_NOMINAL * math.exp(-beta/(DEFAULT_NOMINAL_TEMP + zeroCK))
 
+    config = load_config()
+
+    n_chan = config['n_chan']
+
     # The thermistors are on pins X1 through X8, ascending
-    adc_pin_names = ["X{}".format(i+1) for i in range(n)]
+    adc_pin_names = ["X{}".format(i+1) for i in range(HARDWARE_CHANNELS)]
     # The relays are on pins Y8 to Y1, descending
-    relay_pin_names = ["Y{}".format(8-i) for i in range(n)]
-    
-    config = load_config(n)
+    relay_pin_names = ["Y{}".format(8-i) for i in range(HARDWARE_CHANNELS)]
     
     adc_list = [pyb.ADC(pyb.Pin(p)) for p in adc_pin_names]
     relay_list = [pyb.Pin(p, pyb.Pin.OUT_PP) for p in relay_pin_names]
@@ -527,7 +558,7 @@ def run(n=8, exit_allowed=True, wdt_timeout=None):
 
     serial_port.write("STARTING pyboard multi-thermostat version {}\r\n".format(__version__))
     
-    cmd_proc = CommandLine(serial_port, t_list, exit_allowed=exit_allowed, monitor_period=config["monitor"], wdt_timeout=wdt_timeout)
+    cmd_proc = CommandLine(serial_port, n_chan, t_list, exit_allowed=exit_allowed, monitor_period=config["monitor"], wdt_timeout=wdt_timeout)
     cmd_proc.command_loop()
 
 def main():
