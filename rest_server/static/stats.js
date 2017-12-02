@@ -52,7 +52,7 @@ Vue.component('thermostat', {
 	updateSetPoint: function() {
 	    var args = {setpoint: control_temp(this.display.set)};
 	    console.log(args);
-	    axios.post("http://thermostat.local:27315/thermostat/"+this.display.channel_id, args)
+	    axios.post("/thermostat/"+this.display.channel_id, args)
 		.then(function(response) {
 		    d = display_info_for_state(response.data);
 		    thermo_app.display_info.splice(d.channel_id, 1, d);
@@ -67,7 +67,7 @@ Vue.component('thermostat', {
 	    console.log("setting override to: "+new_state+" for channel: "+this.display.channel_id);
 	    var args = {override: new_state};
 	    console.log(args);
-	    axios.post("http://thermostat.local:27315/thermostat/"+this.display.channel_id, args)
+	    axios.post("/thermostat/"+this.display.channel_id, args)
 		.then(function(response) {
 		    d = display_info_for_state(response.data);
 		    thermo_app.display_info.splice(d.channel_id, 1, d);
@@ -123,7 +123,7 @@ function merge_state_with_lock(old_state, new_state) {
 }
 
 function reload_states() {
-    axios.get("http://thermostat.local:27315/thermostats/all_states")
+    axios.get("/thermostats/all_states")
 	.then(function(response) {
 	    for (item in response.data.all_states) {
 		d = display_info_for_state(response.data.all_states[item]);
@@ -146,7 +146,7 @@ var thermo_app = new Vue({
 	display_info: []
     },
     created: function() {
-	axios.get("http://thermostat.local:27315/thermostats/all_states")
+	axios.get("/thermostats/all_states")
 	    .then(function(response) {
 		while (thermo_app.display_info.length) {
 		    thermo_app.display_info.pop();

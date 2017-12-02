@@ -10,9 +10,9 @@ the temperature and a relay connected to a digital output to control an
 existing heating circuit. Details of a suitable hardware configuration
 can be found in the the [hardware](hardware/Hardware.md) subdirectory.
 
-To make use of this code it should be loaded into the root of the file
-system on the MicroPython board and the `main.py` file should be
-updated to include the lines:
+To make use of this code the `multitherm.py` file should be loaded
+into the root of the file system on the MicroPython board and the
+`main.py` file should be updated to include the lines:
 
 ```
 import multitherm
