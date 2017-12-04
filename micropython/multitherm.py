@@ -23,7 +23,7 @@ import json
 import gc
 import os
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 
 zeroCK = 273.15
 
@@ -515,7 +515,7 @@ def load_config():
     config = {}
     try:
         config = json.load(open("/flash/config.json"))
-    except OSError:
+    except:
         debug("Could not load config file")
 
     if "monitor" not in config:

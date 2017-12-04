@@ -118,6 +118,20 @@ def thermostat_set(id):
         r['errs'] = errs
     return r
 
+@post("/config/saveconfig")
+def saveconfig():
+    boards = set(board for board, index, name in zone_list)
+    for board in boards:
+        board.saveconfig()
+    return {"result":"OK"}
+
+@post("/config/restoreconfig")
+def restoreconfig():
+    boards = set(board for board, index, name in zone_list)
+    for board in boards:
+        board.loadconfig()
+    return {"result":"OK"}
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Web service for a multi-channel thermostat system')
     parser.add_argument('--device', '-d', metavar="PATH", action='append',
