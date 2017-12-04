@@ -28,7 +28,7 @@ commands by virtue of starting with an asterisk `*` and this will be
 immediately followed by the name of the command that enabled these
 messages (e.g. `*ASYC` or `*MONITOR`). These messages are not truly
 asynchonous as they will never be emitted while the board is in the
-process or dewlivering a multi-line response to another command. As a
+process of delivering a multi-line response to another command. As a
 result the controlling code can rely on multi-line responses to
 commands being returned contiguously.
 
@@ -51,15 +51,19 @@ Print the current channel temperature as reported by the channel sensor in degre
 
 ### `SET <chan> <temperature>`
 
-Set the thermostat channel set-point to the given temperature in Celsius
+Set the thermostat channel set-point to the given temperature in
+Celsius. This value is preserved if the configuration is saved.
 
 ### `OVERRIDE <chan> <On|Off|None>`
 
-Override channel output state to force it either on or off, or disable any existing override.
+Override channel output state to force it either on or off, or disable
+any existing override. This value is preserved if the configuration is
+saved.
 
 ### `ADJUST <chan> <offset>`
 
-Set offset to be added to thermistor reading to allow for calibration.
+Set offset to be added to thermistor reading to allow for
+calibration. This value is preserved if the configuration is saved.
 
 ### `STATE <chan>`
 
@@ -82,7 +86,8 @@ If any future version of the firmware adds new values to the state output they w
 Set period for automatic channel state monitoring, in seconds. Each
 period the state of each channel will be printed in starting with the
 string `*MONITOR` followed by the same state information as issued by
-the `STATE` command.
+the `STATE` command. This value is preserved if the configuration is
+saved.
 
 ### `ASYNC [ON|OFF]`
 
@@ -91,6 +96,17 @@ state of thermostate channel outputs or changes in sensed channel
 temperatures by more than 0.1 Celsius. Each change notification will
 take the form of the string `*ASYNC` followed by the same state
 information as issued by the `STATE` command.
+
+### `NCHAN [<count>]`
+
+Display or change the number of active channels. While the default for
+the hardware is to support 8 channels if fewer channels are needed
+then this command allows user to set the number of active
+channels. The active channels are always the lower-numbered channels
+(i.e. channels 1 through `count` inclusive). The relays for the
+inactive channels will be left open. Sending this command without a
+parameter will return the current value without changing it. This
+value is preserved if the configuration is saved.
 
 ### `SAVECONFIG`
 
